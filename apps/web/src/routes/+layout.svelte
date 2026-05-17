@@ -1,9 +1,23 @@
 <script lang="ts">
-	import './layout.css';
-	import favicon from '$lib/assets/favicon.svg';
-
 	let { children } = $props();
 </script>
 
-<svelte:head><link rel="icon" href={favicon} /></svelte:head>
-{@render children()}
+<nav>
+	<a href="/">Papers</a>
+</nav>
+
+<main>
+	{@render children()}
+</main>
+
+<style>
+	nav {
+		padding: 1rem;
+		border-bottom: 1px solid #ccc;
+	}
+	main {
+		padding: 1rem 2rem;
+		max-width: 900px;
+		margin: 0 auto;
+	}
+</style>
