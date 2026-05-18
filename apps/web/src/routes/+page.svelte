@@ -74,6 +74,10 @@
     <p style="color: red;">Error: {data.error}</p>
 {/if}
 
+{#if !data.query && data.papers.length > 0}
+    <p style="margin-top: 1rem; color: #555;">Recent papers</p>
+{/if}
+
 {#if data.papers.length === 0 && data.query}
     <p>No results for "{data.query}".</p>
 {/if}
@@ -101,7 +105,7 @@
     {/each}
 </div>
 
-{#if data.papers.length > 0}
+{#if data.query && data.papers.length > 0}
     <div style="margin-top: 1rem; display: flex; gap: 1rem;">
         {#if data.page > 0}
             <a href="/?{buildSearchParams({ page: data.page - 1 })}">Prev</a>

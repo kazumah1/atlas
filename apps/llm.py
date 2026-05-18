@@ -42,7 +42,7 @@ class HFClient(LLMClient):
         ]
         response = self.client(messages)
         print(response[0].get('generated_text', [])[-1])
-        return response
+        return response[0]['generated_text'][-1]['content']
 
 class OllamaClient(LLMClient):
     def __init__(self):

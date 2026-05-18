@@ -1,10 +1,11 @@
 import type { PageLoad } from './$types';
-import { searchPapers } from '$lib/api';
+import { fetchRecentPapers, searchPapers } from '$lib/api';
 import type { Paper } from '$lib/types';
 
 export const ssr = false;
 
 const LIMIT = 20;
+const RECENT_FEED_LIMIT = 20;
 
 export const load: PageLoad = async ({ url }) => {
     const query = url.searchParams.get('q') ?? '';
@@ -17,8 +18,8 @@ export const load: PageLoad = async ({ url }) => {
     let papers: Paper[] = [];
     let error: string | null = null;
 
-    if (query) {
-        try {
+    try {
+        if (query) {
             papers = await searchPapers({
                 query,
                 date_from,
@@ -27,9 +28,11 @@ export const load: PageLoad = async ({ url }) => {
                 page,
                 limit: LIMIT,
             });
-        } catch (e) {
-            error = (e as Error).message;
+        } else {
+            papers = await fetchRecentPapers(RECENT_FEED_LIMIT);
         }
+    } catch (e) {
+        error = (e as Error).message;
     }
 
     return { query, date_from, date_to, tags, page, papers, limit: LIMIT, error };

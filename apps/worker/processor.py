@@ -1,21 +1,18 @@
 import json
 from bs4 import BeautifulSoup
-from infra.postgres import _postgres_db, _images_db, _vector_db, test_tables, db_get_paper, drop_table, new_conn
+from infra.postgres import _postgres_db, _images_db, _vector_db, test_tables, db_get_paper, drop_table, new_conn, has_embeddings, has_figures, has_keywords, has_summary
 from infra.gcs import upload_figure, upload_paper
 from infra.redis import cache_pdf, get_cached_pdf
 from apps.llm import OpenAIClient, OllamaClient
 from utils.utils import Colors
 from sentence_transformers import SentenceTransformer
-from PyPDF2 import PdfReader 
-from urllib.request import Request, urlopen
+from PyPDF2 import PdfReader
 from io import BytesIO
 from pgvector.psycopg import register_vector
 import numpy as np
 import re
 import pymupdf
-from PIL import Image
 import requests
-from optparse import TitledHelpFormatter
 import hashlib
 import feedparser
 import psycopg
@@ -32,7 +29,7 @@ chunk_prefix_length = 17
 CONTEXT_LENGTH = 2048 - chunk_prefix_length # length of 'search_document: '
 
 
-URL : str = "http://export.arxiv.org/api/query?"
+URL : str = "http://export.arxiv.org/"
 
 def _get_url(entry):
     '''returns the url of a specific entry'''
@@ -42,10 +39,24 @@ def _get_entries(parser_output):
     '''returns the entries array from the raw feedparser output'''
     return parser_output["entries"]
 
-def search(search_queries:list(str), max_results:int=10, page:int=0, sort:str="submittedDate", sort_order:str="descending"):
+def search(search_queries:list[str], max_results:int=10, page:int=0, sort:str="submittedDate", sort_order:str="descending"):
     global URL
-    search_arg = "+AND+".join(search_queries)
-    url = URL + f'search_query={search_arg}&start={page}&max_results={max_results}&sortBy={sort}&sortOrder={sort_order}'
+    search_arg = "+OR+".join(search_queries)
+    url = URL + f'api/query?search_query={search_arg}&start={page}&sortBy={sort}&sortOrder={sort_order}'
+    if max_results:
+        url += f"&max_results={max_results}"
+    response = requests.get(url)
+    d = feedparser.parse(response.text)
+    entries = _get_entries(d)
+    # for entry in entries:
+    #     ingest(entry)
+    return entries
+
+def subscribe(categories:list[str]):
+    """accesses an ArXiv rss feed for various categories"""
+    global URL
+    rss_arg = "+".join(categories)
+    url = URL + f'rss/{rss_arg}'
     response = requests.get(url)
     d = feedparser.parse(response.text)
     entries = _get_entries(d)
@@ -61,13 +72,16 @@ def embed(serialized_job):
     global CONTEXT_LENGTH, MODEL
     job = json.loads(serialized_job)
     
+    paper_id = job['id']
+    if has_embeddings(paper_id):
+        return
     pdf_url = job['pdf_url']
-    pdf_content = get_cached_pdf(job['external_id'])
+    pdf_content = get_cached_pdf(job['id'])
     if pdf_content is None:
         pdf_url = job["pdf_url"]
         response = requests.get(pdf_url)
         pdf_content = response.content
-        cache_pdf(job['external_id'], pdf_content)
+        cache_pdf(job['id'], pdf_content)
     memfile = BytesIO(pdf_content)
     reader = PdfReader(memfile)
 
@@ -105,8 +119,14 @@ def embed(serialized_job):
             line += temp_s
             curr_len += len(temp_s)
         else:
-            line += s 
+            line += s
             curr_len += len(s)
+    # Append the last partial chunk that never exceeded CONTEXT_LENGTH
+    if curr_len > len('search_document: '):
+        text_chunks.append(line)
+    if not text_chunks:
+        print(f"{Colors.YELLOW}No text extracted from PDF, skipping embed{Colors.WHITE}")
+        return
     embeddings = MODEL.encode(text_chunks)
     # for chunk in text_chunks:
     #    print(chunk)
@@ -122,17 +142,21 @@ def embed(serialized_job):
 
     print(f"{Colors.GREEN}Successfully embedded paper content{Colors.WHITE}")
 
+    return
+
 def figures(serialized_job):
     job = json.loads(serialized_job)
     
     paper_id = job['id']
+    if has_figures(paper_id):
+        return
     pdf_url = job['pdf_url']
-    pdf_content = get_cached_pdf(job['external_id'])
+    pdf_content = get_cached_pdf(job['id'])
     if pdf_content is None:
         pdf_url = job["pdf_url"]
         response = requests.get(pdf_url)
         pdf_content = response.content
-        cache_pdf(job['external_id'], pdf_content)
+        cache_pdf(job['id'], pdf_content)
     filestream = BytesIO(pdf_content)
     pdf = pymupdf.open(stream=filestream)
 
@@ -140,7 +164,6 @@ def figures(serialized_job):
 
     if not records:
         raise ValueError("No paper with given id")
-        return False
     elif len(records) > 1:
         print(f"{Colors.YELLOW}More than one paper found{Colors.WHITE}")
 
@@ -168,14 +191,17 @@ def figures(serialized_job):
                 img_count += 1
     print(f"{Colors.GREEN}Successfully stored figures{Colors.WHITE}")
 
+    return
+
 
 def summarize(serialized_job):
     global OPENAI_CLIENT
     job = json.loads(serialized_job)
     html_url = job['html_url']
     paper_id = job['id']
-    text, paper_abstract = read_and_get_abstract(html_url)
-    print(f"Abstract: {paper_abstract[:100]}")
+    if has_summary(paper_id):
+        return
+    text, paper_abstract = get_text_and_abstract(html_url)
 
     records = db_get_paper(paper_id)
     if not records:
@@ -187,30 +213,36 @@ def summarize(serialized_job):
     paper = records[0]
     if paper:
         with new_conn() as conn:
-            conn.execute(f"""
+            conn.execute("""
                 UPDATE papers
-                SET abstract = '{paper_abstract}'
-                WHERE external_id = '{paper_id}';
-            """)
+                SET abstract = %s
+                WHERE external_id = %s;
+            """,
+                (paper_abstract, paper_id)
+            )
             conn.commit()
             print(f"{Colors.GREEN}Successfully extracted abstract{Colors.WHITE}")
             try:
                 summary_text = OPENAI_CLIENT.summarize(text)
-                conn.execute(f"""
+                conn.execute("""
                     UPDATE papers
-                    SET summary = '{summary_text}'
-                    WHERE external_id = '{paper_id}';
-                """)
+                    SET summary = %s
+                    WHERE external_id = %s;
+                """,
+                    (summary_text, paper_id)
+                )
                 print(f"{Colors.GREEN}Successfully summarized paper with OpenAI{Colors.WHITE}")
                 conn.commit()
             except Exception as e:
                 try:
                     summary_text = OLLAMA_CLIENT.summarize(text)
-                    conn.execute(f"""
-                    UPDATE papers
-                    SET summary = '{summary_text}'
-                    WHERE external_id = '{paper_id}';
-                    """)
+                    conn.execute("""
+                        UPDATE papers
+                        SET summary = %s
+                        WHERE external_id = %s;
+                    """,
+                        (summary_text, paper_id)
+                    )
                     print(f"{Colors.GREEN}Successfully summarized paper with Ollama{Colors.WHITE}")
                     conn.commit()
                 except Exception as e:
@@ -219,37 +251,49 @@ def summarize(serialized_job):
 
 
 
-def read_and_get_abstract(html_url):
-    '''
-    for returning the raw html/xhtml of the paper html link
-    args:
-        url: url for the html page
-    '''
-    # don't like that this takes in url not page
+def get_text_and_abstract(html_url: str) -> tuple[str, str]:
     print(f"{Colors.YELLOW}html_url = {html_url}{Colors.WHITE}")
     response = requests.get(html_url)
-    content = response.text
-    soup = BeautifulSoup(content, 'html.parser')
-    abstract_header = soup.find('h6', string="Abstract")
-    if abstract_header is None:
-        return ""
-    abstract_content = abstract_header.find_next_sibling("p")
-    abstract_div = soup.find('div', class_="ltx_abstract")
+    soup = BeautifulSoup(response.text, 'html.parser')
+
+    # Remove tables, math elements, and appendix sections
+    for el in soup.find_all('table'):
+        el.decompose()
+    for el in soup.find_all(class_=re.compile(r'ltx_(equation|equationgroup|Math)')):
+        el.decompose()
+    for el in soup.find_all(class_='ltx_appendix'):
+        el.decompose()
+
+    # Extract abstract
+    abstract_div = soup.find('div', class_='ltx_abstract')
     if abstract_div is None:
-        return ""
-    abstract_text = abstract_div.get_text()[8:]
-    return " ".join(soup.get_text().split()), abstract_text
+        return ("", "")
+    abstract_text = abstract_div.get_text()[8:]  # strip leading "Abstract" heading
+
+    # Extract conclusion section
+    conclusion_text = ""
+    for section in soup.find_all('section', class_='ltx_section'):
+        heading = section.find(re.compile(r'h\d'))
+        if heading and 'conclusion' in heading.get_text().lower():
+            conclusion_text = section.get_text()
+            break
+
+    combined = abstract_text + " " + conclusion_text
+    combined = re.sub(r'\([^)]*\d{4}[^)]*\)', '', combined)  # strip citation markers
+    combined = " ".join(combined.split())
+
+    return combined, abstract_text
 
 
 def keywords(serialized_job):
-    global DB
     job = json.loads(serialized_job)
     html_url = job['html_url']
     paper_id = job['id']
+    if has_keywords(paper_id):
+        return
     records = db_get_paper(paper_id)
     if not records:
         raise ValueError("Error getting keywords: No paper with given id")
-        return False
     elif len(records) > 1:
         print(f"{Colors.YELLOW}More than one paper returned{Colors.WHITE}")
     paper = records[0]
@@ -259,8 +303,7 @@ def keywords(serialized_job):
         if title is None:
             raise ValueError("Error getting keywords: no title")
         if abstract is None:
-            text, paper_abstract = read_and_get_abstract(html_url)
-            print(f"Abstract: {paper_abstract[:100]}")
+            text, paper_abstract = get_text_and_abstract(html_url)
 
             records = db_get_paper(paper_id)
             if not records:
@@ -271,19 +314,24 @@ def keywords(serialized_job):
             paper = records[0]
             if paper:
                 with new_conn() as conn:
-                    conn.execute(f"""
+                    conn.execute("""
                         UPDATE papers
-                        SET abstract = '{paper_abstract}'
-                        WHERE external_id = '{paper_id}';
-                    """)
+                        SET abstract = %s
+                        WHERE external_id = %s;
+                    """,
+                        (paper_abstract, paper_id)
+                    )
                     conn.commit()
-        text = title + abstract
+                abstract = paper_abstract
+        text = (title or "") + (abstract or "")
         with new_conn() as conn:
-            conn.execute(f"""
+            conn.execute("""
                 UPDATE papers
-                SET search_tsv = to_tsvector('english', '{text}')
-                WHERE external_id = '{paper_id}';
-            """)
+                SET search_tsv = to_tsvector('english', %s)
+                WHERE external_id = %s;
+            """,
+                (text, paper_id)
+            )
             conn.commit()
     print("Successfully stored keywords")
     return True
@@ -300,17 +348,17 @@ if __name__ == "__main__":
         print(drop_table("vectors"))
         print(drop_table("images"))
         test_tables()
-    job = {
-            "id": "arxiv.2511.11551",
-            "pdf_url": "https://arxiv.org/pdf/2511.11551",
-            "html_url": "https://arxiv.org/html/2511.11551",
-    }
+    # job = {
+    #         "id": "arxiv.2511.11551",
+    #         "pdf_url": "https://arxiv.org/pdf/2511.11551",
+    #         "html_url": "https://arxiv.org/html/2511.11551",
+    # }
     # print(summarize(json.dumps(job)))
-    job2 = {
-            "id":"arxiv.2512.22121v1",
-            "pdf_url": "https://arxiv.org/pdf/2512.22121v1",
-            "html_url": "https://arxiv.org/html/2512.22121v1",
-    }
+    # job2 = {
+    #         "id":"arxiv.2512.22121v1",
+    #         "pdf_url": "https://arxiv.org/pdf/2512.22121v1",
+    #         "html_url": "https://arxiv.org/html/2512.22121v1",
+    # }
     # print(summarize(json.dumps(job2)))
     # print(keywords(json.dumps(job)))
     # figures(json.dumps(job))

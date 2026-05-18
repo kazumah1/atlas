@@ -8,33 +8,36 @@ import numpy as np
 import numpy.linalg as LA
 import json
 import re
-import heapq
 
 RECENCY_WEIGHT = .4
 RELEVANCE_WEIGHT = .6
 QUALITY_WEIGHT = 0.0
 SCORE_THRESHOLD = 0.0
 
-MODEL = SentenceTransformer("nomic-ai/nomic-embed-text-v1", trust_remote_code=True)
+MODEL = None
 
-def get_sorted_results(query: str, date_from: Optional[timestamp], date_to: Optional[timestamp], tags: Optional[List[str]]):
+def get_model():
+    global MODEL
+    if MODEL is None:
+        MODEL = SentenceTransformer("nomic-ai/nomic-embed-text-v1", trust_remote_code=True)
+    return MODEL
+
+def get_sorted_results(query: str, date_from: Optional[datetime], date_to: Optional[datetime], tags: Optional[List[str]], page: int = 0, limit: int = 20):
     """the ranking heuristic is a weighted product of 3 components:
         recency : exponential decay, prioritizing more recent papers
         relevance : a weighted sum of semantic (user profile) and keyword matching (search query)
         quality : a rough estimation of paper quality based on abstract length and keywords. ideally train a small model for this later
     """
-    global MODEL
     # TODO: DONT HAVE USER PROFILE RN
     # TODO: get rid of heuristic in place of model once enough papers in corpus and once working version is done
 
-    # candidate id : (recency, relevance, quality, overall)
-    candidates = []
     seen = set()
-    
+    scored: list[tuple[float, object]] = []
+
     text_chunks = []
     text_chunks.append("search_query: " + query)
     # get top k candidates
-    query_embedding = MODEL.encode(text_chunks)
+    query_embedding = get_model().encode(text_chunks)
     semantic_records = db_semantic_search(query_embedding)
 
     keywords = re.sub(r'[^\w\s]', "", query).split(" ")
@@ -44,26 +47,20 @@ def get_sorted_results(query: str, date_from: Optional[timestamp], date_to: Opti
     for record in records:
         if record['id'] in seen:
             continue
-        
+
         seen.add(record['id'])
 
         recency = calculate_recency(record)
         relevance = calculate_relevance(query_embedding, keywords, record, tags)
         quality = calculate_quality(query_embedding, record)
 
-        overall = RECENCY_WEIGHT*recency + RELEVANCE_WEIGHT*relevance + QUALITY_WEIGHT*quality
-        
-        heapq.heappush_max(candidates, (overall, record['id']))
+        overall = RECENCY_WEIGHT * recency + RELEVANCE_WEIGHT * relevance + QUALITY_WEIGHT * quality
+        scored.append((overall, record["id"]))
 
-    sorted_results = []
-    while candidates:
-        score, cand_id = heapq.heappop_max(candidates)
-        if score < SCORE_THRESHOLD:
-            continue
-        else:
-            sorted_results.append(cand_id)
-    
-    return sorted_results
+    scored.sort(key=lambda t: t[0], reverse=True)
+    sorted_results = [cand_id for score, cand_id in scored if score >= SCORE_THRESHOLD]
+
+    return sorted_results[page * limit : (page + 1) * limit]
 
 def calculate_relevance(query_embedding, keywords, entry, user=None, semantic_weight=0.7, keyword_weight=0.3, tags=None):
     semantic_weight = semantic_weight / (semantic_weight + keyword_weight)
@@ -89,7 +86,7 @@ def calculate_relevance(query_embedding, keywords, entry, user=None, semantic_we
 
         if tags:
             for tag in tags:
-                if tag.lower() in entry['tags'].lower():
+                if tag.lower() in [t.lower() for t in entry['tags']]:
                     tag_sim += 1
                     break
 

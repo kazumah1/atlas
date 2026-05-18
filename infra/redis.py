@@ -8,17 +8,16 @@ def _redis_server():
         url = os.getenv("REDIS_HOST_DEV")
         port = os.getenv("REDIS_PORT")
         pw = ""
+    
+        r = redis.Redis(
+            host=url,
+            port=port,
+            decode_responses=False,
+            username="default",
+            password=pw
+        )
     else:
-        url = os.getenv("REDIS_HOST")
-        port = os.getenv("REDIS_PORT")
-        pw = os.getenv("REDIS_PASSWORD")
-    r = redis.Redis(
-        host=url,
-        port=port,
-        decode_responses=True,
-        username="default",
-        password=pw
-    )
+        r = redis.from_url(os.getenv("REDIS_URL_PROD"))
     return r
 
 r = _redis_server()

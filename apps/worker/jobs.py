@@ -73,12 +73,12 @@ class JobManager:
         for storing the raw pdf of the paper to GCS
         '''
         # ingest doc to object storage
-        pdf_content = get_cached_pdf(job['external_id'])
+        pdf_content = get_cached_pdf(job['id'])
         if pdf_content is None:
             pdf_url = job["pdf_url"]
             response = requests.get(pdf_url)
             pdf_content = response.content
-            cache_pdf(job['external_id'], pdf_content)
+            cache_pdf(job['id'], pdf_content)
         filename = job["content_hash"] + ".pdf"
 
         upload_paper(filename, pdf_content)
@@ -88,7 +88,7 @@ class JobManager:
     def db_push(self, job: dict):
         with new_conn() as conn:
             conn.execute(
-                f"""INSERT INTO Papers 
+                """INSERT INTO Papers 
                     (external_id, source, title, authors, pdf_url, html_url, content_hash, published_at) 
                     VALUES 
                     (%(id)s, %(source)s, %(title)s, %(authors)s, %(pdf_url)s, %(html_url)s, %(content_hash)s, %(published_at)s)
@@ -107,9 +107,9 @@ class JobManager:
             port = os.getenv("REDIS_PORT")
             pw = ""
         else:
-            url = os.getenv("REDIS_HOST")
+            url = os.getenv("REDIS_HOST_PROD")
             port = os.getenv("REDIS_PORT")
-            pw = os.getenv("REDIS_PASSWORD")
+            pw = os.getenv("REDIS_PASSWORD_PROD")
         r = redis.Redis(
             host=url,
             port=port,
@@ -122,13 +122,12 @@ class JobManager:
         # self.process_q = Queue("process", connection=self.redis)
         # self.worker = Worker([self.ingest_q, self.process_q], connection=self.redis)
 
-    def hash_file(self, pdf_url):
-        pdf_content = get_cached_pdf(job['external_id'])
+    def hash_file(self, pdf_url, job_id):
+        pdf_content = get_cached_pdf(job_id)
         if pdf_content is None:
-            pdf_url = job["pdf_url"]
             response = requests.get(pdf_url)
             pdf_content = response.content
-            cache_pdf(job['external_id'], pdf_content)
+            cache_pdf(job_id, pdf_content)
         mem_object = io.BytesIO(pdf_content)
         file = PdfReader(mem_object)
         h = hashlib.sha256()
@@ -158,7 +157,7 @@ class JobManager:
             if field not in job.keys():
                 raise ValueError("missing or incorrect field: ", field)
         serialized_job = json.dumps(job)
-        res = r.xadd("job_queue", {"job" : serialized_job}, maxlen=5000, approximate=False)
+        res = r.xadd("job_queue", {"job" : serialized_job}, maxlen=50000, approximate=False)
         # if job['job_type'] in {'store', 'db_push'}:
         #     self.ingest_q.enqueue(self.JOBS[job['job_type']], serialized_job)
         # else:
@@ -183,8 +182,8 @@ class JobManager:
             records = db_search_by_pdf_url(pdf_url)
             if records:
                 return
-        content_hash = self.hash_file(pdf_url)
         job_id = "arxiv." + entry['id'][21:]
+        content_hash = self.hash_file(pdf_url, job_id)
         authors = self.arxiv.get_authors(entry)
         html_url = self.arxiv.convert_url_to_html_url(entry["id"])
         title = entry['title']
@@ -225,10 +224,10 @@ class JobManager:
         retries = 3
         while True:
             try:
-                jobs = self.redis.xread(streams={"job_queue":0}, count=6, block=300)
+                jobs = self.redis.xread(streams={"job_queue":"$"}, count=100, block=300)
                 if jobs and jobs[0] and jobs[0][1]:
                     j = 0
-                    while j < 6:
+                    while j < len(jobs[0][1]):
                         job = jobs[0][1][j]
                         job_id, serialized_job = job[0], job[1].get(b'job', None)
                         serialized_job = serialized_job.decode("utf-8")
@@ -279,10 +278,5 @@ class JobManager:
         self.jobs_info()
 
 if __name__ == "__main__":
-    job_manager = JobManager()
-    job_manager.clear_job_queue()
-    entries = search(search_queries=["quantum physics"])
-    entry = entries[0]
-    # print(entry)
-    job_manager.create_job_set(entry)
+    from apps.worker.shared import job_manager
     job_manager.start_workers()

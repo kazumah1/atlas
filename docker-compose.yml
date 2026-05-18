@@ -36,6 +36,25 @@ services:
     environment:
       - RI_APP_HOST=0.0.0.0
 
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+  
+  worker:
+    build: .
+    command: uv run python -m apps.worker.cron_ingest
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+    profiles:
+      - "worker"
+
 volumes:
   pg_data:
   redis_data:

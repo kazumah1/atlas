@@ -1,0 +1,29 @@
+name: Ingest Papers
+
+on:
+    schedule:
+        - cron: '0 1 * * 1-5'
+    workflow_dispatch:
+
+jobs:
+    ingest:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: astral-sh/setup-uv@v4
+              with:
+                python-version: '3.11'
+            
+            - run: uv sync --frozen
+            - run: uv run python -m apps.worker.cron_ingest
+              env:
+                DEVELOPMENT: false
+                REDIS_HOST_PROD: ${{ secrets.REDIS_HOST_PROD }}
+                REDIS_PASSWORD_PROD: ${{ secrets.REDIS_PASSWORD_PROD }}
+                POSTGRES_DB_PROD: ${{ secrets.POSTGRES_DB_PROD }}
+                POSTGRES_USER_PROD: ${{ secrets.POSTGRES_USER_PROD }}
+                POSTGRES_PASSWORD_PROD: ${{ secrets.POSTGRES_PASSWORD_PROD }}
+                OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+                GCS_BUCKET_NAME: ${{ secrets.GCS_BUCKET_NAME }}
+                TOKENIZERS_PARALLELISM: 'False'

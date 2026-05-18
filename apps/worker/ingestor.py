@@ -1,4 +1,3 @@
-from optparse import TitledHelpFormatter
 import requests
 import hashlib
 import feedparser
@@ -21,7 +20,7 @@ def _get_entries(parser_output):
     '''returns the entries array from the raw feedparser output'''
     return parser_output["entries"]
 
-def search(search_queries:list(str), max_results:int=10, page:int=0, sort:str="submittedDate", sort_order:str="descending"):
+def search(search_queries:list[str], max_results:int=10, page:int=0, sort:str="submittedDate", sort_order:str="descending"):
     global URL
     search_arg = "+AND+".join(search_queries)
     url = URL + f'search_query={search_arg}&start={page}&max_results={max_results}&sortBy={sort}&sortOrder={sort_order}'
@@ -51,7 +50,7 @@ def db_push(serialized_job):
 
     with new_conn() as conn:
         conn.execute(
-            f"""INSERT INTO Papers 
+            """INSERT INTO Papers 
                 (external_id, source, title, authors, pdf_url, html_url, content_hash, published_at) 
                 VALUES 
                 (%(id)s, %(source)s, %(title)s, %(authors)s, %(pdf_url)s, %(html_url)s, %(content_hash)s, %(published_at)s)
