@@ -1,6 +1,4 @@
 <script lang="ts">
-	import { searchPapers } from '$lib/api';
-
     import type { PageData } from './$types';
 
     let { data }: { data: PageData } = $props();
