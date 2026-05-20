@@ -5,7 +5,7 @@ from infra.gcs import upload_figure, upload_paper
 from infra.redis import cache_pdf, get_cached_pdf
 from apps.llm import OpenAIClient, OllamaClient
 from utils.utils import Colors
-from sentence_transformers import SentenceTransformer
+from openai import OpenAI
 from PyPDF2 import PdfReader
 from io import BytesIO
 from pgvector.psycopg import register_vector
@@ -18,12 +18,37 @@ import feedparser
 import psycopg
 import io
 from dotenv import load_dotenv
+import os
 
 load_dotenv()
 
 OPENAI_CLIENT = OpenAIClient()
 OLLAMA_CLIENT = OllamaClient()
-MODEL = SentenceTransformer("nomic-ai/nomic-embed-text-v1", trust_remote_code=True)
+_embed_client = None
+_local_model = None
+
+def embed_texts(texts: list[str]) -> list[np.ndarray]:
+    if os.getenv("DEVELOPMENT") == "true":
+        global _local_model
+        if _local_model is None:
+            from sentence_transformers import SentenceTransformer
+            _local_model = SentenceTransformer("nomic-ai/nomic-embed-text-v1", trust_remote_code=True)
+        return [e.astype(np.float32) for e in _local_model.encode(texts)]
+    else:
+        global _embed_client
+        if _embed_client is None:
+            _embed_client = OpenAI()
+        embeddings = []
+        batch_size = 100
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            response = _embed_client.embeddings.create(
+                model="text-embedding-3-small",
+                input=batch,
+                dimensions=768
+            )
+            embeddings.extend([np.array(item.embedding, dtype=np.float32) for item in response.data])
+        return embeddings
 
 chunk_prefix_length = 17
 CONTEXT_LENGTH = 2048 - chunk_prefix_length # length of 'search_document: '
@@ -66,10 +91,10 @@ def subscribe(categories:list[str]):
 
 def embed(serialized_job):
     '''
-    generating embeddings with sentencetransformers then storing embeddings + metadata in pgvector vector db 
+    generating embeddings with openai then storing embeddings + metadata in pgvector vector db
     for semantic search and later rag
     '''
-    global CONTEXT_LENGTH, MODEL
+    global CONTEXT_LENGTH
     job = json.loads(serialized_job)
     
     paper_id = job['id']
@@ -127,7 +152,7 @@ def embed(serialized_job):
     if not text_chunks:
         print(f"{Colors.YELLOW}No text extracted from PDF, skipping embed{Colors.WHITE}")
         return
-    embeddings = MODEL.encode(text_chunks)
+    embeddings = embed_texts(text_chunks)
     # for chunk in text_chunks:
     #    print(chunk)
     #    print()

@@ -1,26 +1,38 @@
 ### api server helper functions
 from typing import Optional, List
-from sentence_transformers import SentenceTransformer
-from infra.postgres import new_conn, db_semantic_search, db_keyword_search, db_get_entry
-from pgvector.psycopg import register_vector
+from openai import OpenAI
+from infra.postgres import db_semantic_search, db_keyword_search, db_get_entry
 from datetime import datetime
 import numpy as np
 import numpy.linalg as LA
-import json
 import re
+import os
 
 RECENCY_WEIGHT = .4
 RELEVANCE_WEIGHT = .6
 QUALITY_WEIGHT = 0.0
 SCORE_THRESHOLD = 0.0
 
-MODEL = None
+_openai_client = None
+_local_model = None
 
-def get_model():
-    global MODEL
-    if MODEL is None:
-        MODEL = SentenceTransformer("nomic-ai/nomic-embed-text-v1", trust_remote_code=True)
-    return MODEL
+def embed_query(text: str) -> np.ndarray:
+    if os.getenv("DEVELOPMENT") == "true":
+        global _local_model
+        if _local_model is None:
+            from sentence_transformers import SentenceTransformer
+            _local_model = SentenceTransformer("nomic-ai/nomic-embed-text-v1", trust_remote_code=True)
+        return _local_model.encode([text])[0].astype(np.float32)
+    else:
+        global _openai_client
+        if _openai_client is None:
+            _openai_client = OpenAI()
+        response = _openai_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=text,
+            dimensions=768
+        )
+        return np.array(response.data[0].embedding, dtype=np.float32)
 
 def get_sorted_results(query: str, date_from: Optional[datetime], date_to: Optional[datetime], tags: Optional[List[str]], page: int = 0, limit: int = 20):
     """the ranking heuristic is a weighted product of 3 components:
@@ -34,10 +46,8 @@ def get_sorted_results(query: str, date_from: Optional[datetime], date_to: Optio
     seen = set()
     scored: list[tuple[float, object]] = []
 
-    text_chunks = []
-    text_chunks.append("search_query: " + query)
     # get top k candidates
-    query_embedding = get_model().encode(text_chunks)
+    query_embedding = [embed_query("search_query: " + query)]
     semantic_records = db_semantic_search(query_embedding)
 
     keywords = re.sub(r'[^\w\s]', "", query).split(" ")

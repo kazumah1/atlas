@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4>=4.14.3",
-    "einops>=0.8.2",
     "fastapi[standard]>=0.135.1",
     "feedparser>=6.0.12",
     "google-cloud-storage>=3.9.0",
@@ -24,14 +23,4 @@ dependencies = [
     "requests>=2.32.5",
     "rq>=2.7.0",
     "ruff>=0.15.6",
-    "sentence-transformers>=5.2.3",
-    "transformers>=5.3.0",
 ]
-
-[tool.uv.sources]
-torch = { index = "pytorch-cpu" }
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
