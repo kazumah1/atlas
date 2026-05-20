@@ -27,7 +27,7 @@ def _postgres_db():
             WHERE table_name = 'papers'
         )
         """).fetchone()
-        if not table_exists:
+        if not table_exists['exists']:
             # might need to add gcs link to pdf and abstract
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS Papers (
@@ -57,7 +57,7 @@ def _images_db():
                 WHERE table_name = 'images'
             )
         """).fetchone()
-        if not table_exists:
+        if not table_exists['exists']:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS Images (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -90,7 +90,7 @@ def _vector_db():
         #         for c in columns:
         #             print(c)
 
-        if not table_exists:
+        if not table_exists['exists']:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS vectors (
                     id BIGSERIAL PRIMARY KEY,
