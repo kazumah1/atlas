@@ -1,6 +1,7 @@
+import { PUBLIC_API_URL } from '$env/static/public';
 import type { Paper, SearchParams, SearchResponse } from './types';
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = PUBLIC_API_URL;
 
 export async function searchPapers(params: SearchParams): Promise<Paper[]> {
 	const {query, date_from, date_to, tags, page = 0, limit = 20 } = params;

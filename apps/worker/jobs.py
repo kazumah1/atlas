@@ -107,20 +107,15 @@ class JobManager:
     def initialize_redis(self):
         load_dotenv()
         if os.getenv("DEVELOPMENT") == 'true':
-            url = os.getenv("REDIS_HOST_DEV")
-            port = os.getenv("REDIS_PORT")
-            pw = ""
+            r = redis.Redis(
+                host=os.getenv("REDIS_HOST_DEV"),
+                port=os.getenv("REDIS_PORT"),
+                decode_responses=False,
+                username="default",
+                password=""
+            )
         else:
-            url = os.getenv("REDIS_HOST_PROD")
-            port = os.getenv("REDIS_PORT")
-            pw = os.getenv("REDIS_PASSWORD_PROD")
-        r = redis.Redis(
-            host=url,
-            port=port,
-            decode_responses=False,
-            username="default",
-            password=pw
-        )
+            r = redis.from_url(os.getenv("REDIS_URL_PROD"), decode_responses=False)
         self.redis = r
         # self.ingest_q = Queue("ingest", connection=self.redis)
         # self.process_q = Queue("process", connection=self.redis)
