@@ -19,11 +19,10 @@ jobs:
             - run: uv run python -m apps.worker.cron_ingest
               env:
                 DEVELOPMENT: false
+                REDIS_URL_PROD: ${{ secrets.REDIS_URL_PROD }} 
                 REDIS_HOST_PROD: ${{ secrets.REDIS_HOST_PROD }}
                 REDIS_PASSWORD_PROD: ${{ secrets.REDIS_PASSWORD_PROD }}
                 POSTGRES_DB_PROD: ${{ secrets.POSTGRES_DB_PROD }}
-                POSTGRES_USER_PROD: ${{ secrets.POSTGRES_USER_PROD }}
-                POSTGRES_PASSWORD_PROD: ${{ secrets.POSTGRES_PASSWORD_PROD }}
                 OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
                 GCS_BUCKET_NAME: ${{ secrets.GCS_BUCKET_NAME }}
                 TOKENIZERS_PARALLELISM: 'False'
