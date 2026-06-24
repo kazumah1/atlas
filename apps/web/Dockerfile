@@ -8,7 +8,7 @@ WORKDIR /app
 RUN npm install -g pnpm
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --ignore-scripts && pnpm rebuild esbuild
 
 COPY . ./
 RUN pnpm build
