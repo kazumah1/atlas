@@ -29,6 +29,7 @@ class ArxivDataManager:
                 if link["title"] == 'pdf':
                     return link["href"]
         entry_id = entry.get("id", "")
+        print(f"DEBUG entry id: {entry_id}, links: {links}")
         if "/abs/" in entry_id:
             return entry_id.replace("/abs/", "/pdf/")
         return None
