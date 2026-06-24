@@ -24,6 +24,7 @@ if __name__ == "__main__":
     categories = [list(p) for p in zip(categories[::2], categories[1::2])]
 
     # Initialize a thread pool for parallel processing
+    futures = []
     with ThreadPoolExecutor() as executor:
         for c in categories:
             print(f"Category: {c}")
@@ -31,4 +32,7 @@ if __name__ == "__main__":
 
             # Split entries into batches and process them in parallel
             for batch in chunked(entries, BATCH_SIZE):
-                executor.submit(process_batch, batch)
+                futures.append(executor.submit(process_batch, batch))
+
+    for f in futures:
+        f.result()
