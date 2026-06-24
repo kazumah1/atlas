@@ -177,6 +177,7 @@ class JobManager:
         '''
         pdf_url = self.arxiv.get_pdf_url(entry)
         if pdf_url is None:
+            print(f"No PDF URL for {entry.get('title', entry.get('id', 'unknown'))}, skipping")
             return
         records = db_search_by_pdf_url(pdf_url)
         if records:
