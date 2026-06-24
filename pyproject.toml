@@ -23,4 +23,5 @@ dependencies = [
     "requests>=2.32.5",
     "rq>=2.7.0",
     "ruff>=0.15.6",
+    "transformers>=5.12.1",
 ]
