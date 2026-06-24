@@ -28,10 +28,9 @@ class ArxivDataManager:
             if "title" in link:
                 if link["title"] == 'pdf':
                     return link["href"]
-        entry_id = entry.get("id", "")
-        print(f"DEBUG entry id: {entry_id}, links: {links}")
-        if "/abs/" in entry_id:
-            return entry_id.replace("/abs/", "/pdf/")
+            href = link.get("href", "")
+            if "/abs/" in href:
+                return href.replace("/abs/", "/pdf/")
         return None
     
     def get_authors(self, entry):
