@@ -22,4 +22,4 @@ RUN caddy fmt Caddyfile --overwrite
 
 COPY --from=build /app/build ./build
 
-CMD ["caddy", "run", "--config", "Caddyfile", "--adapter", "caddyfile"]
+CMD ["run", "--config", "/app/Caddyfile", "--adapter", "caddyfile"]
