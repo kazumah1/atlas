@@ -1,0 +1,10 @@
+{
+  "deploy": {
+    "startCommand": "node node_modules/.bin/serve build -l tcp://0.0.0.0:$PORT"
+  },
+  "providers": {
+    "node": {
+      "runtime": true
+    }
+  }
+}
