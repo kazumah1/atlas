@@ -15,9 +15,7 @@
         format json
     }
 
-    rewrite /health /*
-
-    root * build
+    root * /app/build
 
     encode gzip
 
