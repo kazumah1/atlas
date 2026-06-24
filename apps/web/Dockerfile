@@ -13,13 +13,12 @@ RUN pnpm install --frozen-lockfile --ignore-scripts && pnpm rebuild esbuild
 COPY . ./
 RUN pnpm build && ls -la /app/build/
 
-FROM caddy
+FROM node:lts-alpine AS runtime
 
 WORKDIR /app
 
-COPY Caddyfile ./
-RUN caddy fmt Caddyfile --overwrite
+RUN npm install -g serve
 
 COPY --from=build /app/build ./build
 
-CMD ["caddy", "run", "--config", "/app/Caddyfile", "--adapter", "caddyfile"]
+CMD ["serve", "build", "-l", "tcp://0.0.0.0:3000"]
