@@ -177,11 +177,10 @@ class JobManager:
         '''
         pdf_url = self.arxiv.get_pdf_url(entry)
         if pdf_url is None:
-            pdf_url = ""
-        else:
-            records = db_search_by_pdf_url(pdf_url)
-            if records:
-                return
+            return
+        records = db_search_by_pdf_url(pdf_url)
+        if records:
+            return
         job_id = "arxiv." + entry['id'][21:]
         content_hash = self.hash_file(pdf_url, job_id)
         authors = self.arxiv.get_authors(entry)
