@@ -132,7 +132,7 @@ class JobManager:
         h = hashlib.sha256()
         for page in file.pages:
             text = page.extract_text()
-            text_bytes = text.encode('utf-8')
+            text_bytes = text.encode('utf-8', errors='surrogatepass').decode('utf-16', errors='ignore').encode('utf-8')
             h.update(text_bytes)
         return h.hexdigest()
     
