@@ -156,7 +156,10 @@ class JobManager:
             if field not in job.keys():
                 raise ValueError("missing or incorrect field: ", field)
         serialized_job = json.dumps(job)
-        res = r.xadd("job_queue", {"job" : serialized_job}, maxlen=50000, approximate=False)
+        try:
+            r.xadd("job_queue", {"job" : serialized_job}, maxlen=50000, approximate=False)
+        except Exception:
+            pass
         # if job['job_type'] in {'store', 'db_push'}:
         #     self.ingest_q.enqueue(self.JOBS[job['job_type']], serialized_job)
         # else:

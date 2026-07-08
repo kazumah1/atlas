@@ -23,7 +23,13 @@ def _redis_server():
 r = _redis_server()
 
 def cache_pdf(paper_id: str, pdf_bytes:bytes, ttl_sec: int=3600):
-    r.set(f"pdf:{paper_id}", pdf_bytes, ex=ttl_sec)
+    try:
+        r.set(f"pdf:{paper_id}", pdf_bytes, ex=ttl_sec)
+    except Exception:
+        pass
 
 def get_cached_pdf(paper_id:str) -> bytes | None:
-    return r.get(f"pdf:{paper_id}")
+    try:
+        return r.get(f"pdf:{paper_id}")
+    except Exception:
+        return None
