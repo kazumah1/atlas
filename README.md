@@ -2,7 +2,7 @@
 
 Atlas is a search engine for research papers. It pulls new papers from arXiv, extracts and enriches their contents, then combines semantic search with ordinary keyword matching so useful results do not depend on an exact title or phrase.
 
-[Source on GitHub](https://github.com/kazumah1/atlas)
+[Live site](https://gallant-encouragement-production-603e.up.railway.app/) · [Source on GitHub](https://github.com/kazumah1/atlas)
 
 ## How it works
 
