@@ -1,11 +1,11 @@
-FROM node:lts-alpine AS build
+FROM node:22.14-alpine AS build
 
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false
 ENV NPM_CONFIG_FUND=false
 
 WORKDIR /app
 
-RUN npm install -g pnpm
+RUN corepack enable && corepack prepare pnpm@10.10.0 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --ignore-scripts && pnpm rebuild esbuild
@@ -13,11 +13,11 @@ RUN pnpm install --frozen-lockfile --ignore-scripts && pnpm rebuild esbuild
 COPY . ./
 RUN pnpm build && ls -la /app/build/
 
-FROM node:lts-alpine AS runtime
+FROM node:22.14-alpine AS runtime
 
 WORKDIR /app
 
-RUN npm install -g serve
+RUN npm install -g serve@14.2.4
 
 COPY --from=build /app/build ./build
 
