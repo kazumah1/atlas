@@ -227,11 +227,12 @@ def summarize(serialized_job):
     if has_summary(paper_id):
         return
     text, paper_abstract = get_text_and_abstract(html_url)
+    if not text:
+        raise ValueError(f"No summary source text found at {html_url}")
 
     records = db_get_paper(paper_id)
     if not records:
         raise ValueError("Error summarizing paper: No paper with given id")
-        return False
     elif len(records) > 1:
         print(f"{Colors.YELLOW}More than one paper found{Colors.WHITE}")
 
@@ -240,10 +241,10 @@ def summarize(serialized_job):
         with new_conn() as conn:
             conn.execute("""
                 UPDATE papers
-                SET abstract = %s
+                SET abstract = %s, html_url = %s
                 WHERE external_id = %s;
             """,
-                (paper_abstract, paper_id)
+                (paper_abstract, html_url, paper_id)
             )
             conn.commit()
             print(f"{Colors.GREEN}Successfully extracted abstract{Colors.WHITE}")
@@ -258,7 +259,7 @@ def summarize(serialized_job):
                 )
                 print(f"{Colors.GREEN}Successfully summarized paper with OpenAI{Colors.WHITE}")
                 conn.commit()
-            except Exception as e:
+            except Exception as openai_error:
                 try:
                     summary_text = OLLAMA_CLIENT.summarize(text)
                     conn.execute("""
@@ -270,15 +271,19 @@ def summarize(serialized_job):
                     )
                     print(f"{Colors.GREEN}Successfully summarized paper with Ollama{Colors.WHITE}")
                     conn.commit()
-                except Exception as e:
-                    raise ValueError("Error saving summary")
+                except Exception as ollama_error:
+                    raise RuntimeError(
+                        "OpenAI and Ollama summary generation both failed. "
+                        f"OpenAI: {openai_error}; Ollama: {ollama_error}"
+                    ) from ollama_error
     return True
 
 
 
 def get_text_and_abstract(html_url: str) -> tuple[str, str]:
     print(f"{Colors.YELLOW}html_url = {html_url}{Colors.WHITE}")
-    response = requests.get(html_url)
+    response = requests.get(html_url, timeout=30)
+    response.raise_for_status()
     soup = BeautifulSoup(response.text, 'html.parser')
 
     # Remove tables, math elements, and appendix sections

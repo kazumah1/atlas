@@ -3,6 +3,8 @@ from ollama import chat, ChatResponse
 from transformers import pipeline
 from dotenv import load_dotenv
 
+SUMMARY_INSTRUCTIONS = """You are an academic scholar and researcher with years of professional research experience. You are proficient in all fields, particularly in STEM. You will be given text extracted from a research paper's HTML page, so some figures and images may be absent although their captions may remain. Summarize the problem, methods, and results, including enough relevant detail for a reader to discuss and apply the paper's methods and findings without reading the original. Preserve mathematical notation as LaTeX. Wrap inline math in $...$ and display math in $$...$$ so it can be rendered by KaTeX. Return only the summary."""
+
 class LLMClient():
     def __init__(self):
         load_dotenv()
@@ -23,7 +25,7 @@ class OpenAIClient(LLMClient):
         response = self.client.responses.create(
                 model="gpt-5",
                 reasoning={"effort":"low"},
-                instructions="You are an academic scholar and researcher with years of professional research experience. You are profficient in all fields, particularly in STEM. You will be given the text contents of a research paper that you are tasked with summarizing. The text has been extracted from an HTML page, and thus, some figures and images may not be present, although their captions will be. The summary should include the necessary aspects of the research paper, such as the problem they are trying to solve, the methods that they used to solve it, and the results. This summary should include all of the relevant and important concepts in the paper. The summary should include enough information that the reader can effectively discuss and apply the methods and findings of the paper without having to read the entire original paper.",
+                instructions=SUMMARY_INSTRUCTIONS,
                 input=f"Paper Text: {text}"
         )
         print(response.output_text)
@@ -37,7 +39,7 @@ class HFClient(LLMClient):
     
     def summarize(self, text):
         messages = [
-                {"role":"system", "content": "You are an academic scholar and researcher with years of professional research experience. You are profficient in all fields, particularly in STEM. You will be given the text contents of a research paper that you are tasked with summarizing. The text has been extracted from an HTML page, and thus, some figures and images may not be present, although their captions will be. The summary should include the necessary aspects of the research paper, such as the problem they are trying to solve, the methods that they used to solve it, and the results. This summary should include all of the relevant and important concepts in the paper. The summary should include enough information that the reader can effectively discuss and apply the methods and findings of the paper without having to read the entire original paper. Your output should be only the summary, and you should not do any thinking - just return the summary immediately."},
+                {"role":"system", "content": SUMMARY_INSTRUCTIONS},
                 {"role":"user", "content": f"Paper Text: {text}"}
         ]
         response = self.client(messages)
@@ -51,7 +53,7 @@ class OllamaClient(LLMClient):
     def summarize(self, text):
         print("text:", text)
         messages = [
-            {"role":"system", "content": "You are an academic scholar and researcher with years of professional research experience. You are profficient in all fields, particularly in STEM. You will be given the text contents of a research paper that you are tasked with summarizing. The text has been extracted from an HTML page, and thus, some figures and images may not be present, although their captions will be. The summary should include the necessary aspects of the research paper, such as the problem they are trying to solve, the methods that they used to solve it, and the results. This summary should include all of the relevant and important concepts in the paper. The summary should include enough information that the reader can effectively discuss and apply the methods and findings of the paper without having to read the entire original paper. Your output should be only the summary, and nothing else."},
+            {"role":"system", "content": SUMMARY_INSTRUCTIONS},
             {"role":"user", "content": f"Paper Text: {text}"}
         ]
         response: ChatResponse = chat(model="qwen:latest", messages=messages)

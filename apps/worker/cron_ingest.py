@@ -1,4 +1,3 @@
-from apps.worker.jobs import JobManager
 from apps.worker.processor import subscribe
 from apps.worker.shared import job_manager
 from concurrent.futures import ThreadPoolExecutor

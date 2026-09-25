@@ -16,6 +16,7 @@
 		"test": "npm run test:unit -- --run"
 	},
 	"dependencies": {
+		"katex": "^0.18.9",
 		"serve": "^14.2.4"
 	},
 	"devDependencies": {

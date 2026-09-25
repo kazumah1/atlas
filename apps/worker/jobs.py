@@ -1,26 +1,40 @@
 import redis
 from dotenv import load_dotenv
+import argparse
 import os
 import json
-import psycopg
 import hashlib
+import re
 import requests
 from PyPDF2 import PdfReader
 import io
-from rq import Queue, Worker
 from infra.postgres import _postgres_db, _vector_db, _images_db, new_conn, db_search_by_pdf_url
 from infra.redis import get_cached_pdf, cache_pdf
-from apps.worker.processor import *
+from infra.gcs import upload_paper
+from apps.worker.processor import embed, figures, keywords, summarize
 from utils.utils import Colors
-from pgvector.psycopg import register_vector
+
+
+JOB_QUEUE = "job_queue"
+ARXIV_ID_PATTERN = re.compile(
+    r"(?P<identifier>(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?)",
+    re.IGNORECASE,
+)
 
 class ArxivDataManager:
     def __init__(self):
         ...
+
+    def get_arxiv_id(self, value):
+        """Extract a modern or legacy ArXiv identifier from URLs and RSS IDs."""
+        match = ARXIV_ID_PATTERN.search(value or "")
+        if match is None:
+            raise ValueError(f"Could not extract ArXiv id from {value!r}")
+        return match.group("identifier").removesuffix(".pdf")
+
     def convert_url_to_html_url(self, url):
-        '''converts original arxiv paper url to html url'''
-        html_url = url[:17] + 'html' + url[20:] 
-        return html_url
+        """Convert any supported ArXiv identifier or URL to a canonical HTML URL."""
+        return f"https://arxiv.org/html/{self.get_arxiv_id(url)}"
    
     def get_pdf_url(self, entry):
         links = entry["links"]
@@ -32,6 +46,12 @@ class ArxivDataManager:
             if "/abs/" in href:
                 return href.replace("/abs/", "/pdf/")
         return None
+
+    def get_entry_id(self, entry, pdf_url):
+        try:
+            return self.get_arxiv_id(entry.get("id", ""))
+        except ValueError:
+            return self.get_arxiv_id(pdf_url)
     
     def get_authors(self, entry):
         return [a['name'] for a in entry['authors']]
@@ -93,9 +113,9 @@ class JobManager:
         with new_conn() as conn:
             conn.execute(
                 """INSERT INTO Papers 
-                    (external_id, source, title, authors, pdf_url, html_url, content_hash, published_at) 
+                    (external_id, source, title, authors, pdf_url, html_url, content_hash, tags, published_at)
                     VALUES 
-                    (%(id)s, %(source)s, %(title)s, %(authors)s, %(pdf_url)s, %(html_url)s, %(content_hash)s, %(published_at)s)
+                    (%(id)s, %(source)s, %(title)s, %(authors)s, %(pdf_url)s, %(html_url)s, %(content_hash)s, %(tags)s, %(published_at)s)
                     ON CONFLICT (external_id) DO NOTHING;
                 """,
                 job
@@ -123,47 +143,32 @@ class JobManager:
 
     def hash_file(self, pdf_url, job_id):
         pdf_content = get_cached_pdf(job_id)
-        if pdf_content is None:
-            response = requests.get(pdf_url)
-            pdf_content = response.content
-            cache_pdf(job_id, pdf_content)
-        mem_object = io.BytesIO(pdf_content)
-        file = PdfReader(mem_object)
-        h = hashlib.sha256()
-        for page in file.pages:
-            text = page.extract_text()
-            text_bytes = text.encode('utf-8', errors='surrogatepass').decode('utf-16', errors='ignore').encode('utf-8')
-            h.update(text_bytes)
-        return h.hexdigest()
+        max_retries = 4
+        retries = 0
+        completed = False
+        while not completed and retries < max_retries:
+            if pdf_content is None:
+                response = requests.get(pdf_url)
+                pdf_content = response.content
+                cache_pdf(job_id, pdf_content)
+            mem_object = io.BytesIO(pdf_content)
+            file = PdfReader(mem_object)
+            h = hashlib.sha256()
+            for page in file.pages:
+                text = page.extract_text()
+                text_bytes = text.encode('utf-8', errors='surrogatepass').decode('utf-16', errors='ignore').encode('utf-8')
+                h.update(text_bytes)
+            return h.hexdigest()
     
     def add_job(self, job: dict):
         r = self.redis
         # TODO: use pydantic
-        required_fields = {
-            "id",
-            "title",
-            "authors",
-            "pdf_url",
-            "html_url",
-            "source",
-            "content_hash",
-            "license",
-            "published_at",
-            "tags",
-            "job_type"
-            }
+        required_fields = {"id", "pdf_url", "html_url", "source", "job_type"}
         for field in required_fields:
             if field not in job.keys():
                 raise ValueError("missing or incorrect field: ", field)
         serialized_job = json.dumps(job)
-        try:
-            r.xadd("job_queue", {"job" : serialized_job}, maxlen=50000, approximate=False)
-        except Exception:
-            pass
-        # if job['job_type'] in {'store', 'db_push'}:
-        #     self.ingest_q.enqueue(self.JOBS[job['job_type']], serialized_job)
-        # else:
-        #     self.process_q.enqueue(self.JOBS[job['job_type']], serialized_job)
+        return r.xadd(JOB_QUEUE, {"job": serialized_job}, maxlen=50000, approximate=False)
         
 
     def create_job_set(self, entry):
@@ -184,10 +189,11 @@ class JobManager:
         records = db_search_by_pdf_url(pdf_url)
         if records:
             return
-        job_id = "arxiv." + entry['id'][21:]
+        arxiv_id = self.arxiv.get_entry_id(entry, pdf_url)
+        job_id = "arxiv." + arxiv_id
         content_hash = self.hash_file(pdf_url, job_id)
         authors = self.arxiv.get_authors(entry)
-        html_url = self.arxiv.convert_url_to_html_url(entry["id"])
+        html_url = self.arxiv.convert_url_to_html_url(arxiv_id)
         title = entry['title']
         publish_date = entry['published']
         tags = self.arxiv.get_tags(entry)
@@ -222,41 +228,108 @@ class JobManager:
             self.add_job(job=job)
 
 
-    def start_workers(self):
-        retries = 3
+    def _normalize_job(self, job):
+        if job.get("source") == "arxiv":
+            job["html_url"] = self.arxiv.convert_url_to_html_url(job["pdf_url"])
+        return job
+
+    def _run_job(self, stream_id, fields, retries=3):
+        serialized_job = fields.get(b"job") or fields.get("job")
+        if isinstance(serialized_job, bytes):
+            serialized_job = serialized_job.decode("utf-8")
+        if not serialized_job:
+            print(f"{Colors.RED}Job {stream_id!r} has no payload{Colors.WHITE}")
+            return False
+
+        job = self._normalize_job(json.loads(serialized_job))
+        job_type = job.get("job_type")
+        job_func = self.JOBS.get(job_type)
+        if job_func is None:
+            print(f"{Colors.RED}Unknown job type {job_type!r}{Colors.WHITE}")
+            return False
+
+        normalized_payload = json.dumps(job)
+        for attempt in range(1, retries + 1):
+            try:
+                print(f"{Colors.BLUE}Job: {job_type} (attempt {attempt}/{retries}){Colors.WHITE}")
+                job_func(normalized_payload)
+                self.redis.xdel(JOB_QUEUE, stream_id)
+                return True
+            except Exception as exc:
+                print(f"{Colors.RED}{job_type} failed: {exc}{Colors.WHITE}")
+        return False
+
+    def process_jobs(self, stop_when_empty=False, max_jobs=None, block_ms=5000):
+        """Process existing backlog first, deleting only successful jobs."""
+        cursor = "0-0"
+        attempted = 0
+        succeeded = 0
+
         while True:
             try:
-                jobs = self.redis.xread(streams={"job_queue":"$"}, count=100, block=300)
-                if jobs and jobs[0] and jobs[0][1]:
-                    j = 0
-                    while j < len(jobs[0][1]):
-                        job = jobs[0][1][j]
-                        job_id, serialized_job = job[0], job[1].get(b'job', None)
-                        serialized_job = serialized_job.decode("utf-8")
-                        unserialized_job = json.loads(serialized_job)
-                        job_func = self.JOBS[unserialized_job['job_type']]
-                        print(f"{Colors.BLUE}Job: {unserialized_job['job_type']}{Colors.WHITE}")
-                        print(job[1])
-                        try:
-                            job_func(serialized_job)
-                        except Exception as e:
-                            print(f"{Colors.RED}{unserialized_job['job_type']} failed with exception {e}{Colors.WHITE}")
-                            i = 1
-                            success = False
-                            while i <= retries and success == False:
-                                print(f"Retrying, attempt {i} / {retries}:")
-                                try:
-                                    job_func(serialized_job)
-                                    success = True
-                                except Exception as e:
-                                    print(f"{Colors.RED}attempt failed{Colors.WHITE}")
-                                i += 1
-                        self.redis.xdel("job_queue", job_id)
-                        j += 1
+                jobs = self.redis.xread(
+                    streams={JOB_QUEUE: cursor},
+                    count=100,
+                    block=None if stop_when_empty else block_ms,
+                )
+                if not jobs:
+                    if stop_when_empty:
+                        return {"attempted": attempted, "succeeded": succeeded}
+                    continue
+
+                for _, entries in jobs:
+                    for stream_id, fields in entries:
+                        cursor = stream_id
+                        attempted += 1
+                        succeeded += int(self._run_job(stream_id, fields))
+                        if max_jobs is not None and attempted >= max_jobs:
+                            return {"attempted": attempted, "succeeded": succeeded}
             except (KeyboardInterrupt, SystemExit):
                 self.jobs_info()
                 raise
-            
+
+    def start_workers(self):
+        return self.process_jobs(stop_when_empty=False)
+
+    def drain_jobs(self, max_jobs=None):
+        return self.process_jobs(stop_when_empty=True, max_jobs=max_jobs)
+
+    def enqueue_missing_summaries(self, limit=100):
+        """Queue a controlled batch of existing papers that have no summary."""
+        with new_conn() as conn:
+            records = conn.execute(
+                """
+                SELECT external_id, source, pdf_url, html_url
+                FROM papers
+                WHERE summary IS NULL
+                ORDER BY published_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            ).fetchall()
+
+        queued = 0
+        for record in records:
+            html_url = record["html_url"]
+            if record["source"] == "arxiv":
+                html_url = self.arxiv.convert_url_to_html_url(record["pdf_url"])
+                with new_conn() as conn:
+                    conn.execute(
+                        "UPDATE papers SET html_url = %s WHERE external_id = %s",
+                        (html_url, record["external_id"]),
+                    )
+                    conn.commit()
+            self.add_job(
+                {
+                    "id": record["external_id"],
+                    "source": record["source"],
+                    "pdf_url": record["pdf_url"],
+                    "html_url": html_url,
+                    "job_type": "summarize",
+                }
+            )
+            queued += 1
+        return queued
 
     def jobs_info(self): 
         print("Queue State")
@@ -281,4 +354,16 @@ class JobManager:
 
 if __name__ == "__main__":
     from apps.worker.shared import job_manager
-    job_manager.start_workers()
+
+    parser = argparse.ArgumentParser(description="Process paper jobs")
+    parser.add_argument("--drain", action="store_true", help="Exit when queue is empty")
+    parser.add_argument("--max-jobs", type=int, default=None)
+    parser.add_argument("--enqueue-missing-summaries", type=int, metavar="LIMIT")
+    args = parser.parse_args()
+
+    if args.enqueue_missing_summaries is not None:
+        print(f"Queued {job_manager.enqueue_missing_summaries(args.enqueue_missing_summaries)} summaries")
+    if args.drain:
+        print(job_manager.drain_jobs(max_jobs=args.max_jobs))
+    elif args.enqueue_missing_summaries is None:
+        job_manager.start_workers()

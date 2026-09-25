@@ -47,7 +47,7 @@ services:
   
   worker:
     build: .
-    command: uv run python -m apps.worker.cron_ingest
+    command: uv run python -m apps.worker.jobs
     env_file: .env
     depends_on:
       - postgres

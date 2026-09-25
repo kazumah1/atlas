@@ -1,4 +1,3 @@
-import json
 from dotenv import load_dotenv
 from pgvector.psycopg import register_vector
 import psycopg
@@ -192,25 +191,76 @@ def db_semantic_search(query_embeddings):
                 paper_records.append(r)
     return paper_records
 
-def db_keyword_search(keywords: list):
+def db_keyword_search(query: str, date_from=None, date_to=None, tags=None, limit: int = 100):
+    """Search paper text without requiring precomputed search vectors.
+
+    Direct title matching handles exact/partial title searches immediately.
+    The generated tsvector also searches available abstracts and summaries while
+    older rows are waiting for the processing pipeline to backfill search_tsv.
+    """
+    conditions = [
+        """
+        (
+            title ILIKE %s
+            OR to_tsvector(
+                'english',
+                coalesce(title, '') || ' ' ||
+                coalesce(abstract, '') || ' ' ||
+                coalesce(summary, '')
+            ) @@ plainto_tsquery('english', %s)
+        )
+        """
+    ]
+    params = [f"%{query}%", query]
+
+    if date_from is not None:
+        conditions.append("published_at >= %s")
+        params.append(date_from)
+    if date_to is not None:
+        conditions.append("published_at <= %s")
+        params.append(date_to)
+    if tags:
+        conditions.append(
+            """
+            EXISTS (
+                SELECT 1
+                FROM unnest(coalesce(tags, ARRAY[]::text[])) AS paper_tag
+                WHERE lower(paper_tag) = ANY(%s)
+            )
+            """
+        )
+        params.append([tag.lower() for tag in tags])
+
+    params.extend([query, f"%{query}%", query, max(1, min(limit, 500))])
+    sql = f"""
+        SELECT *
+        FROM papers
+        WHERE {' AND '.join(conditions)}
+        ORDER BY
+            CASE WHEN lower(title) = lower(%s) THEN 0
+                 WHEN title ILIKE %s THEN 1
+                 ELSE 2
+            END,
+            ts_rank(
+                to_tsvector(
+                    'english',
+                    coalesce(title, '') || ' ' ||
+                    coalesce(abstract, '') || ' ' ||
+                    coalesce(summary, '')
+                ),
+                plainto_tsquery('english', %s)
+            ) DESC,
+            published_at DESC
+        LIMIT %s
+    """
+
     records = []
-    paper_records = []
     with new_conn() as conn:
         curr = conn.cursor()
-        curr.execute("""
-            SELECT DISTINCT ON (external_id) * FROM papers WHERE search_tsv @@ to_tsquery(%s) ORDER BY external_id, published_at DESC LIMIT 25;
-        """,
-        (" | ".join(keywords),))
+        curr.execute(sql, params)
         for record in curr:
             records.append(record)
-
-        for record in records:
-            paper_id = record['external_id']
-            paper_rs = db_get_paper_embeddings(paper_id)
-            for r in paper_rs:
-                record['embedding'] = np.asarray(r['embedding'])
-                paper_records.append(record)
-    return paper_records
+    return records
 
 def db_add(metadata):
     # TODO: verify metadata is in right format
